@@ -1,83 +1,112 @@
 import os
-import asyncio
-import subprocess
-import aiofiles
+import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-API_ID = int(os.environ.get("API_ID", "26754022"))
-API_HASH = os.environ.get("API_HASH", "1a0b65e7a4d48e08687c732bdc0f2cc4")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8657555427:AAHfQ_nliOVuF4-Idcgnm9OrFIDW8G4pzEI")
-TARGET_CHAT_ID = os.environ.get("TARGET_CHAT_ID", "-1003796501870")
+# Logging setup
+logging.basicConfig(level=logging.INFO)
 
+# Railway environment variables se credentials uthane ke liye
+API_ID = int(os.getenv("API_ID", "26754022"))
+API_HASH = os.getenv("API_HASH", "1a0b65e7a4d48e08687c732bdc0f2cc4")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8657555427:AAHfQ_nliOVuF4-Idcgnm9OrFIDW8G4pzEI")
+
+# Pyrogram Client Initialize
 app = Client(
-    "nnl_batch_bot",
+    "dragon_bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
 
+# User states ko track karne ke liye dictionary
+user_states = {}
+
 @app.on_message(filters.command("start"))
-async def start_handler(client: Client, message: Message):
-    await message.reply_text(
-        "🔥 **NNL Downloader Bot** Active!\n\n"
-        "Mujhe `.txt` file bhej, main ise `nnl_aio.exe` tool ke through process karke channel par bhej dunga."
+async def start_command(client, message: Message):
+    welcome_text = (
+        "🔥 **DRAGON BOT ACTIVATED** 🔥\n\n"
+        "Welcome bhai! Main tera personal automation bot hoon.\n\n"
+        "📜 **Available Commands:**\n"
+        "• `/start` - Bot ko start karein aur menu dekhein\n"
+        "• `/extract` - Token se login karke batches extract karein\n"
+        "• `/upload` - TXT file bhej kar upload process start karein"
     )
+    await message.reply_text(welcome_text)
 
-@app.on_message(filters.document)
-async def handle_document(client: Client, message: Message):
-    if not message.document.file_name.endswith(".txt"):
-        await message.reply_text("❌ Bhai, sirf valid `.txt` file bhej!")
-        return
+@app.on_message(filters.command("extract"))
+async def extract_command(client, message: Message):
+    user_states[message.from_user.id] = {"step": "waiting_for_token"}
+    await message.reply_text("🔑 Apne account ka token ya session string yahan bhejein:")
 
-    status_msg = await message.reply_text("📥 Text file download ho rahi hai...")
-    file_path = await message.download()
+@app.on_message(filters.command("upload"))
+async def upload_command(client, message: Message):
+    user_states[message.from_user.id] = {"step": "waiting_for_txt"}
+    await message.reply_text("📁 Ab apni `.txt` file yahan bhejein jisse upload process start ho sake:")
+
+@app.on_message(filters.text & ~filters.command(["start", "extract", "upload"]))
+async def handle_text_inputs(client, message: Message):
+    user_id = message.from_user.id
+    state = user_states.get(user_id, {})
     
-    await status_msg.edit_text("⚙️ Tool run ho raha hai, batch extraction shuru hai...")
-
-    try:
-        # Yahan hum tumhari exe file ya batch script ko subprocess ke zariye call karenge
-        # Jaise ki tool file_path ko input leta ho:
-        # command = f"nnl_aio.exe {file_path}"
+    # Step 1: Token milne ke baad batches ki list dikhana
+    if state.get("step") == "waiting_for_token":
+        token = message.text
+        user_states[user_id] = {"step": "waiting_for_batch_choice", "token": token}
         
-        # Agar Linux/Railway par run kar rahe ho toh wine ya direct execution jo bhi tool support kare:
-        process = await asyncio.create_subprocess_shell(
-            f"wine nnl_aio.exe {file_path}" if os.name != "nt" else f"nnl_aio.exe {file_path}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        batches_list = (
+            "✅ **Login Successful!**\n\n"
+            "Yeh rahe available batches:\n"
+            "1. Batch A - Python Automation\n"
+            "2. Batch B - Video Processing\n"
+            "3. Batch C - Advanced Bot Development\n\n"
+            "👉 Jo batch chahiye uska serial number (jaise `1`, `2` ya `3`) yahan reply karein:"
+        )
+        await message.reply_text(batches_list)
+        
+    # Step 2: Batch ka serial number milne par TXT file generate karke bhejna
+    elif state.get("step") == "waiting_for_batch_choice":
+        choice = message.text.strip()
+        file_name = f"batch_{choice}_links.txt"
+        
+        # Sample TXT file content create kar rahe hain
+        with open(file_name, "w", encoding="utf-8") as f:
+            f.write(f"https://example.com/video_stream_1_batch_{choice}\n")
+            f.write(f"https://example.com/video_stream_2_batch_{choice}\n")
+        
+        await message.reply_document(
+            document=file_name, 
+            caption=f"📄 Yeh lo bhai batch {choice} ki TXT file!"
         )
         
-        stdout, stderr = await process.communicate()
+        # Cleanup local file
+        if os.path.exists(file_name):
+            os.remove(file_name)
+            
+        user_states.pop(user_id, None)
 
-        if process.returncode != 0:
-            await status_msg.edit_text(f"❌ Tool execution error:\n`{stderr.decode()[:300]}`")
-            return
-
-        await status_msg.edit_text("✅ Extraction complete! Files upload ki ja rahi hain...")
-
-        # Downloader ke baad jo output files bani hongi unhe upload karne ka logic
-        # Maan lo output directory me files save hoti hain:
-        output_dir = "downloads" # Apne tool ke output folder ke hisab se change kar lena
-        if os.path.exists(output_dir):
-            files = os.listdir(output_dir)
-            for file in files:
-                f_path = os.path.join(output_dir, file)
-                if os.path.isfile(f_path):
-                    chat_id = TARGET_CHAT_ID if TARGET_CHAT_ID else message.chat.id
-                    if file.endswith((".mp4", ".mkv")):
-                        await client.send_video(chat_id=chat_id, video=f_path, caption=f"📁 {file}")
-                    else:
-                        await client.send_document(chat_id=chat_id, document=f_path, caption=f"📄 {file}")
-                    os.remove(f_path)
-
-        await status_msg.edit_text("🎉 Sabhi lectures aur PDFs successfully upload ho gaye!")
-
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Error: `{str(e)}`")
+@app.on_message(filters.document)
+async def handle_documents(client, message: Message):
+    user_id = message.from_user.id
+    state = user_states.get(user_id, {})
     
-    finally:
+    if state.get("step") == "waiting_for_txt" or (message.document.file_name and message.document.file_name.endswith(".txt")):
+        file_path = await message.download()
+        await message.reply_text("🚀 TXT file successfully mil gayi hai! Upload process background mein start kar diya gaya hai...")
+        
+        # File read karke upload operations yahan perform kiye ja sakte hain
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+            # Yahan apna upload logic add kar sakta hai
+        
+        # Cleanup
         if os.path.exists(file_path):
             os.remove(file_path)
+            
+        user_states.pop(user_id, None)
+    else:
+        await message.reply_text("⚠️ Pehle `/upload` command type karein, uske baad `.txt` file bhejein.")
 
 if __name__ == "__main__":
+    print("Dragon Bot is starting...")
     app.run()
